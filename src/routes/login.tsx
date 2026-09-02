@@ -135,8 +135,81 @@ function LoginPage() {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  // OTP Verification State
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpError, setOtpError] = useState("");
+  const [otpCooldown, setOtpCooldown] = useState(0);
 
   /** Login — direct phone + password auth (no OTP) */
+  /** Send OTP to phone number */
+  const handleSendOtp = async (phone: string, purpose: "login" | "register") => {
+    setOtpError("");
+    const phoneError = validatePhone(phone);
+    if (phoneError) {
+      setOtpError(phoneError);
+      return;
+    }
+    
+    try {
+      const { sendPhoneOtp } = await import("@/lib/server/phone-otp");
+      const result = await sendPhoneOtp({ data: { phone: phone.trim(), purpose } });
+      
+      if (result.ok) {
+        if ("devCode" in result && result.devCode) {
+          console.info(`[OTP] Code for ${phone.trim()} (${purpose}): ${result.devCode}`);
+        }
+        setOtpSent(true);
+        toast.success("OTP sent!", { description: "Check your phone for the verification code." });
+        // Start cooldown
+        setOtpCooldown(60);
+        const interval = setInterval(() => {
+          setOtpCooldown((prev) => {
+            if (prev <= 1) {
+              clearInterval(interval);
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+      } else {
+        setOtpError(result.error || "Failed to send OTP. Please try again.");
+      }
+    } catch (err) {
+      console.error("[OTP] Send failed:", err);
+      setOtpError("Failed to send OTP. Please try again.");
+    }
+  };
+
+  /** Verify OTP code */
+  const handleVerifyOtp = async (phone: string, purpose: "login" | "register") => {
+    setOtpError("");
+    if (!otpCode || otpCode.length !== 6) {
+      setOtpError("Please enter the 6-digit OTP code.");
+      return;
+    }
+    
+    setOtpVerifying(true);
+    try {
+      const { verifyPhoneOtp } = await import("@/lib/server/phone-otp");
+      const result = await verifyPhoneOtp({ data: { phone: phone.trim(), code: otpCode, purpose } });
+      
+      if (result.ok) {
+        setOtpVerified(true);
+        toast.success("Phone verified!", { description: "You can now proceed with sign-in." });
+      } else {
+        setOtpError(result.error || "Invalid OTP code. Please try again.");
+      }
+    } catch (err) {
+      console.error("[OTP] Verify failed:", err);
+      setOtpError("Failed to verify OTP. Please try again.");
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
+
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setAuthError("");
@@ -154,6 +227,11 @@ function LoginPage() {
       const rateLimitError = checkRateLimit(authPhone);
       if (rateLimitError) {
         setAuthError(rateLimitError);
+        return;
+      }
+      // Check OTP verification
+      if (!otpVerified) {
+        setAuthError("Please verify your phone number with OTP first.");
         return;
       }
 
@@ -240,6 +318,11 @@ function LoginPage() {
     const phoneErr = validatePhone(regPhone);
     if (phoneErr) {
       setRegError(phoneErr);
+      return;
+    }
+    // Check OTP verification
+    if (!otpVerified) {
+      setRegError("Please verify your phone number with OTP first.");
       return;
     }
     const passwordErr = validatePassword(regPassword);
@@ -457,6 +540,71 @@ function LoginPage() {
                         className="w-full rounded-xl border border-border bg-muted/40 pl-10 pr-3.5 py-2.5 text-sm font-mono focus:border-emerald-500 focus:outline-none transition-all"
                       />
                     </motion.div>
+                    {/* OTP Section - Shows after phone entry */}
+                    {authPhone && !otpVerified && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        className="mb-3"
+                      >
+                        {!otpSent ? (
+                          <motion.button
+                            type="button"
+                            onClick={() => handleSendOtp(authPhone, "login")}
+                            disabled={otpCooldown > 0}
+                            className="w-full rounded-xl border border-emerald-500/50 bg-emerald-500/10 py-2.5 text-sm font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 transition-all disabled:opacity-50"
+                          >
+                            {otpCooldown > 0 ? `Resend OTP in ${otpCooldown}s` : "Send OTP to verify phone"}
+                          </motion.button>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                value={otpCode}
+                                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                                placeholder="Enter 6-digit OTP"
+                                className="flex-1 rounded-xl border border-border bg-muted/40 px-3.5 py-2.5 text-sm font-mono tracking-widest text-center focus:border-emerald-500 focus:outline-none transition-all"
+                              />
+                              <motion.button
+                                type="button"
+                                onClick={() => void handleVerifyOtp(authPhone, "login")}
+                                disabled={otpVerifying}
+                                className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-all"
+                              >
+                                {otpVerifying ? "Verifying..." : "Verify"}
+                              </motion.button>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOtpSent(false);
+                                  setOtpCode("");
+                                  setOtpVerified(false);
+                                }}
+                                className="text-xs text-muted-foreground hover:text-foreground"
+                              >
+                                Change phone number
+                              </button>
+                              {otpCooldown === 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSendOtp(authPhone, "login")}
+                                  className="text-xs text-emerald-600 hover:text-emerald-500"
+                                >
+                                  Resend OTP
+                                </button>
+                              )}
+                            </div>
+                            {otpError && <p className="text-xs text-destructive">{otpError}</p>}
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                    
                     <motion.div variants={itemVariants} className="relative mb-3">
                       <Lock className="absolute left-3.5 top-3 size-4 text-muted-foreground" />
                       <motion.input
@@ -505,238 +653,6 @@ function LoginPage() {
                   </motion.div>
                 )}
 
-                {/* Role selector tabs — only in demo mode when auth is off */}
-                {!authEnabled && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.1 }}
-                    className="mx-auto max-w-md rounded-2xl border border-border bg-card/60 p-1.5 mb-6"
-                  >
-                    <div className="grid grid-cols-2 gap-1">
-                      <motion.button
-                        type="button"
-                        onClick={() => setLoginRole("farmer")}
-                        whileTap={{ scale: 0.97 }}
-                        className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium transition-all ${
-                          loginRole === "farmer"
-                            ? "bg-emerald-700 text-white shadow-sm"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        <Tractor className="size-4" />
-                        Farmer Portal
-                      </motion.button>
-                      <motion.button
-                        type="button"
-                        onClick={() => setLoginRole("operator")}
-                        whileTap={{ scale: 0.97 }}
-                        className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium transition-all ${
-                          loginRole === "operator"
-                            ? "bg-emerald-700 text-white shadow-sm"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        <Warehouse className="size-4" />
-                        Warehouse Owner
-                      </motion.button>
-                    </div>
-                  </motion.div>
-                )}
-
-                <SpotlightCard className="overflow-hidden p-6 md:p-10 border border-border shadow-xl">
-                  <AnimatePresence mode="wait">
-                    {loginRole === "farmer" ? (
-                      <motion.div
-                        key="farmer-login"
-                        variants={containerVariants}
-                        initial="hidden"
-                        animate="visible"
-                      >
-                        <motion.div variants={itemVariants} className="flex items-center justify-between border-b border-border pb-5">
-                          <div>
-                            <h2 className="text-xl font-medium text-foreground">Farmer Account Login</h2>
-                            <p className="text-sm text-muted-foreground">
-                              Book cold rooms & dry yards, track harvest lots on the live map.
-                            </p>
-                          </div>
-                          <motion.div
-                            whileHover={{ rotate: 5, scale: 1.1 }}
-                            className="hidden size-12 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 md:flex items-center justify-center"
-                          >
-                            <Tractor className="size-6" />
-                          </motion.div>
-                        </motion.div>
-
-                        <motion.div variants={itemVariants} className="mt-6">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                            Select Registered Farmer Account
-                          </label>
-                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            {farmersList.map((f, i) => {
-                              const isSelected = selectedFarmerId === f.id;
-                              return (
-                                <motion.div
-                                  key={f.id}
-                                  variants={itemVariants}
-                                  whileHover={{ scale: 1.02 }}
-                                  whileTap={{ scale: 0.98 }}
-                                  onClick={() => setSelectedFarmerId(f.id)}
-                                  className={`group relative cursor-pointer rounded-2xl border p-4 transition-all ${
-                                    isSelected
-                                      ? "border-emerald-500 bg-emerald-500/5 dark:bg-emerald-950/20 shadow-sm"
-                                      : "border-border bg-card hover:border-emerald-500/50 hover:bg-muted/50"
-                                  }`}
-                                >
-                                  <div className="flex items-start gap-3">
-                                    <img
-                                      src={f.photo}
-                                      alt={f.name}
-                                      className="size-11 rounded-full border border-border bg-muted shrink-0"
-                                    />
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center justify-between">
-                                        <p className="font-medium text-sm truncate">{f.name}</p>
-                                        {isSelected && (
-                                          <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                                        )}
-                                      </div>
-                                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                                        {f.farm} · {f.village}
-                                      </p>
-                                    </div>
-                                  </div>
-                                </motion.div>
-                              );
-                            })}
-                          </div>
-                        </motion.div>
-
-                        <motion.div variants={itemVariants} className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-border pt-6">
-                          <div className="text-xs text-muted-foreground">
-                            Selected: <strong className="text-foreground">{activeFarmer?.name}</strong> ({activeFarmer?.village})
-                          </div>
-                          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="w-full sm:w-auto">
-                            <Button
-                              onClick={handleLogin}
-                              size="lg"
-                              className="w-full sm:w-auto bg-emerald-700 hover:bg-emerald-600 text-white font-medium px-8 shadow-md"
-                            >
-                              Enter Farmer Desk
-                              <ArrowRight className="ml-2 size-4" />
-                            </Button>
-                          </motion.div>
-                        </motion.div>
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key="operator-login"
-                        variants={containerVariants}
-                        initial="hidden"
-                        animate="visible"
-                      >
-                        <motion.div variants={itemVariants} className="flex items-center justify-between border-b border-border pb-5">
-                          <div>
-                            <h2 className="text-xl font-medium text-foreground">Warehouse Owner Login</h2>
-                            <p className="text-sm text-muted-foreground">
-                              Manage storage yards, list available space with daily rates, and submit WDRA verification.
-                            </p>
-                          </div>
-                          <motion.div
-                            whileHover={{ rotate: -5, scale: 1.1 }}
-                            className="hidden size-12 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 md:flex items-center justify-center"
-                          >
-                            <Warehouse className="size-6" />
-                          </motion.div>
-                        </motion.div>
-
-                        {/* Preset operators */}
-                        <motion.div variants={itemVariants} className="mt-6">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                            Select Registered Warehouse Owner
-                          </label>
-                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            {operatorsList.map((op) => {
-                              const isSelected = selectedOperatorId === op.id;
-                              return (
-                                <motion.div
-                                  key={op.id}
-                                  variants={itemVariants}
-                                  whileHover={{ scale: 1.02 }}
-                                  whileTap={{ scale: 0.98 }}
-                                  onClick={() => setSelectedOperatorId(op.id)}
-                                  className={`group relative cursor-pointer rounded-2xl border p-4 transition-all ${
-                                    isSelected
-                                      ? "border-emerald-500 bg-emerald-500/5 dark:bg-emerald-950/20 shadow-sm"
-                                      : "border-border bg-card hover:border-emerald-500/50 hover:bg-muted/50"
-                                  }`}
-                                >
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div>
-                                      <p className="font-medium text-sm text-foreground">{op.name}</p>
-                                      <p className="text-xs text-muted-foreground mt-0.5">{op.contact}</p>
-                                    </div>
-                                    {isSelected && (
-                                      <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                                    )}
-                                  </div>
-                                </motion.div>
-                              );
-                            })}
-                          </div>
-                        </motion.div>
-
-                        {/* 3 WAREHOUSE DOCUMENT SUBMISSION OPTIONS */}
-                        <motion.div variants={itemVariants} className="mt-8 border-t border-border pt-6">
-                          <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground flex items-center gap-2">
-                            <FileCheck2 className="size-4 text-emerald-600 dark:text-emerald-400" />
-                            Warehouse Documentation Uploads
-                          </h3>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Submit required legal deed, capacity audit, and WDRA accreditation documents.
-                          </p>
-
-                          <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                            <FileUploadCard
-                              label="1. Warehouse Documentations"
-                              description="Title deed or lease agreement"
-                              file={warehouseDoc}
-                              onFileChange={setWarehouseDoc}
-                            />
-                            <FileUploadCard
-                              label="2. Storage Capacity Docs"
-                              description="Engineering capacity audit"
-                              file={capacityDoc}
-                              onFileChange={setCapacityDoc}
-                            />
-                            <FileUploadCard
-                              label="3. WDRA Verification"
-                              description="WDRA accreditation certificate"
-                              file={wdraDoc}
-                              onFileChange={setWdraDoc}
-                            />
-                          </div>
-                        </motion.div>
-
-                        <motion.div variants={itemVariants} className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-border pt-6">
-                          <div className="text-xs text-muted-foreground">
-                            Selected: <strong className="text-foreground">{activeOperator?.name}</strong>
-                          </div>
-                          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="w-full sm:w-auto">
-                            <Button
-                              onClick={handleLogin}
-                              size="lg"
-                              className="w-full sm:w-auto bg-emerald-700 hover:bg-emerald-600 text-white font-medium px-8 shadow-md"
-                            >
-                              Enter Warehouse Desk
-                              <ArrowRight className="ml-2 size-4" />
-                            </Button>
-                          </motion.div>
-                        </motion.div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </SpotlightCard>
               </motion.div>
             )}
 
@@ -846,6 +762,70 @@ function LoginPage() {
                           />
                         </div>
                       </div>
+                      {/* OTP Verification for Register */}
+                      {regPhone && !otpVerified && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          className="col-span-1 sm:col-span-2"
+                        >
+                          {!otpSent ? (
+                            <motion.button
+                              type="button"
+                              onClick={() => handleSendOtp(regPhone, "register")}
+                              disabled={otpCooldown > 0}
+                              className="w-full rounded-xl border border-emerald-500/50 bg-emerald-500/10 py-2.5 text-sm font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 transition-all disabled:opacity-50"
+                            >
+                              {otpCooldown > 0 ? `Resend OTP in ${otpCooldown}s` : "Send OTP to verify phone number"}
+                            </motion.button>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                    inputMode="numeric"
+                                    autoComplete="one-time-code"
+                                  value={otpCode}
+                                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                                  placeholder="Enter 6-digit OTP"
+                                  className="flex-1 rounded-xl border border-border bg-muted/40 px-3.5 py-2.5 text-sm font-mono tracking-widest text-center focus:border-emerald-500 focus:outline-none transition-all"
+                                />
+                                <motion.button
+                                  type="button"
+                                  onClick={() => void handleVerifyOtp(regPhone, "register")}
+                                  disabled={otpVerifying}
+                                  className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-all"
+                                >
+                                  {otpVerifying ? "Verifying..." : "Verify"}
+                                </motion.button>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOtpSent(false);
+                                    setOtpCode("");
+                                    setOtpVerified(false);
+                                  }}
+                                  className="text-xs text-muted-foreground hover:text-foreground"
+                                >
+                                  Change phone number
+                                </button>
+                                {otpCooldown === 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSendOtp(regPhone, "register")}
+                                    className="text-xs text-emerald-600 hover:text-emerald-500"
+                                  >
+                                    Resend OTP
+                                  </button>
+                                )}
+                              </div>
+                              {otpError && <p className="text-xs text-destructive">{otpError}</p>}
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
                       <div>
                         <label className="text-xs font-semibold text-foreground">Password</label>
                         <div className="relative mt-1">

@@ -159,34 +159,50 @@ function newId(prefix: string): string {
  * When SMS_GATEWAY_URL is not set, logs to console (dev mode).
  */
 async function deliverOtp(phone: string, code: string, purpose: string): Promise<void> {
-  const gatewayUrl = process.env.SMS_GATEWAY_URL;
-  const gatewayKey = process.env.SMS_GATEWAY_API_KEY;
-
-  if (gatewayUrl && gatewayKey) {
-    // Production: send via configured SMS gateway
-    // Example payload for a generic REST SMS API — adapt to your provider:
-    const response = await fetch(gatewayUrl, {
-      method: "POST",
+  // 2Factor.in API configuration (free: 50 OTPs/month)
+  const twoFactorApiKey = process.env.TWOFACTOR_API_KEY;
+  
+  if (twoFactorApiKey) {
+    // Production: send via 2Factor.in OTP API
+    // API format: https://2factor.in/API/V1/{API_KEY}/SMS/{PHONE}/{OTP}
+    const apiUrl = `https://2factor.in/API/V1/${twoFactorApiKey}/SMS/${phone}/${code}`;
+    
+    console.log(`[2Factor] Sending OTP to ${phone}...`);
+    
+    const response = await fetch(apiUrl, {
+      method: "GET",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${gatewayKey}`,
       },
-      body: JSON.stringify({
-        to: phone,
-        message: `Your Granary verification code is: ${code}. Valid for ${OTP_EXPIRY_MINUTES} minutes. Do not share this code.`,
-      }),
     });
 
+    const responseText = await response.text();
+    
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`SMS delivery failed (${response.status}): ${text}`);
+      console.error(`[2Factor] SMS delivery failed (${response.status}): ${responseText}`);
+      throw new Error(`SMS delivery failed (${response.status}): ${responseText}`);
+    }
+
+    // Parse 2Factor.in response
+    try {
+      const result = JSON.parse(responseText);
+      if (result.Status === "Success") {
+        console.log(`[2Factor] OTP sent successfully to ${phone} | Session: ${result.Details}`);
+      } else {
+        console.error(`[2Factor] API error: ${result.Details || responseText}`);
+        throw new Error(`2Factor API error: ${result.Details || "Unknown error"}`);
+      }
+    } catch (parseErr) {
+      console.error(`[2Factor] Failed to parse response: ${responseText}`);
+      throw new Error(`SMS delivery failed: ${responseText}`);
     }
   } else {
     // Dev/preview: log to console so developers can test the flow
     console.log(`\n📱 [DEV OTP] Phone: ${phone} | Code: ${code} | Purpose: ${purpose}\n`);
+    console.log(`💡 To enable real SMS, add TWOFACTOR_API_KEY to your .env file`);
+    console.log(`💡 Get free key at: https://2factor.in`);
   }
 }
-
 // ——— Server Functions ———
 
 /**
@@ -258,6 +274,10 @@ export const sendPhoneOtp = createServerFn({ method: "POST" })
     const id = newId("otp");
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
+    if (process.env.NODE_ENV !== "production") {
+      console.info(`[OTP] Generated | phone: ${phone} | code: ${code} | purpose: ${data.purpose}`);
+    }
+
     await sql`
       INSERT INTO phone_otps (id, phone, code, purpose, expires_at, attempts)
       VALUES (${id}, ${phone}, ${code}, ${data.purpose}, ${expiresAt.toISOString()}, 0)
@@ -274,7 +294,11 @@ export const sendPhoneOtp = createServerFn({ method: "POST" })
       return { ok: false as const, error: "Failed to send SMS. Please try again." };
     }
 
-    return { ok: true as const, phone };
+    return {
+      ok: true as const,
+      phone,
+      ...(process.env.NODE_ENV !== "production" ? { devCode: code } : {}),
+    };
   });
 
 /**
@@ -310,6 +334,10 @@ export const verifyPhoneOtp = createServerFn({ method: "POST" })
 
     const otp = otps[0];
     const attempts = Number(otp.attempts ?? 0);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.info(`[OTP] Verify | phone: ${phone} | entered: ${data.code} | stored: ${otp.code} | purpose: ${data.purpose}`);
+    }
 
     if (attempts >= OTP_MAX_ATTEMPTS) {
       // Delete exhausted OTP so user can request a new one

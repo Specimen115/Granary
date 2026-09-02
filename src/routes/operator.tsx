@@ -60,16 +60,42 @@ function OperatorDesk() {
     refreshFromDb();
   }, []);
 
-  // Fetch profile for editing
+  // Fetch profile
   useEffect(() => {
     if (isAuthenticated) {
       import("@/lib/server/granary").then(({ getMyProfile }) => {
-        getMyProfile().then((p) => setMyProfile(p as Record<string, unknown> | null)).catch(() => {});
+        getMyProfile().then((p) => {
+          const profile = p as Record<string, unknown> | null;
+          setMyProfile(profile);
+          if (profile && (profile.name || profile.village_or_company)) {
+            const currentList = useGranary.getState().operatorsList;
+            const updated = currentList.map((o) =>
+              o.id === operatorId
+                ? {
+                    ...o,
+                    name: String(profile.village_or_company || profile.name),
+                    contact: String(profile.phone || profile.farm_or_contact || o.contact),
+                  }
+                : o
+            );
+            useGranary.setState({ operatorsList: updated });
+          }
+        }).catch(() => {});
       }).catch(() => {});
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, operatorId]);
 
-  const op = operatorsList.find((o) => o.id === operatorId) || operatorsList[0];
+  const op = useMemo(() => {
+    if (myProfile && (myProfile.name || myProfile.village_or_company || myProfile.farm_or_contact)) {
+      return {
+        id: String(myProfile.user_id || operatorId),
+        name: String(myProfile.village_or_company || myProfile.name || "Warehouse Owner"),
+        contact: String(myProfile.phone || myProfile.farm_or_contact || "Operator"),
+        facilityIds: (operatorsList.find((o) => o.id === operatorId) || operatorsList[0])?.facilityIds || [],
+      };
+    }
+    return operatorsList.find((o) => o.id === operatorId) || operatorsList[0];
+  }, [myProfile, operatorsList, operatorId]);
   const pendingRequests = useMemo(
     () => farmerRequests.filter((r) => r.status === "pending"),
     [farmerRequests]
@@ -512,8 +538,21 @@ function OperatorDesk() {
           await updateMyProfile({ data: updates });
           refreshFromDb();
           const { getMyProfile } = await import("@/lib/server/granary");
-          const p = await getMyProfile() as Record<string, unknown> | null;
+          const p = (await getMyProfile()) as Record<string, unknown> | null;
           setMyProfile(p);
+          if (p && (p.name || p.village_or_company)) {
+            const currentList = useGranary.getState().operatorsList;
+            const updated = currentList.map((o) =>
+              o.id === operatorId
+                ? {
+                    ...o,
+                    name: String(p.village_or_company || p.name),
+                    contact: String(p.phone || p.farm_or_contact || o.contact),
+                  }
+                : o
+            );
+            useGranary.setState({ operatorsList: updated });
+          }
         }}
         onDeleteAccount={async () => {
           const { deleteMyAccount } = await import("@/lib/server/granary");

@@ -153,6 +153,7 @@ export function StorageMap({
 
 
     if (showFarm) {
+      const currentFarmer = (farmersList || farmers).find((f) => f.id === farmerId) || farmer;
       const icon = L.divIcon({
         className: "granary-pin-wrap",
         html: `<span class="farm-pin" aria-hidden="true">
@@ -161,9 +162,9 @@ export function StorageMap({
         iconSize: [28, 28],
         iconAnchor: [14, 14],
       });
-      L.marker([farmer.lat, farmer.lng], { icon, zIndexOffset: 200 })
+      L.marker([currentFarmer.lat, currentFarmer.lng], { icon, zIndexOffset: 200 })
         .addTo(group)
-        .bindTooltip("Kulkarni Vineyards, Niphad", {
+        .bindTooltip(`${currentFarmer.farm}, ${currentFarmer.village}`, {
           direction: "top",
           offset: [0, -12],
         });

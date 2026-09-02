@@ -145,14 +145,14 @@ export function AiRequestModal({
         const { createStorageRequest, loadCatalog } = await import(
           "@/lib/server/granary"
         );
-        const result = await createStorageRequest({
+        const result = (await createStorageRequest({
           data: {
             crop,
             variety: "Standard Grade",
             tons: tonsNeeded,
             days: daysRequested,
           },
-        });
+        })) as any;
         if (result?.advisory) {
           toast.message("AI Advisory generated", {
             description: String(result.advisory).slice(0, 180) + "…",

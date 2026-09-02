@@ -8,9 +8,8 @@ export default async function securityHeaders(
   next: () => unknown | Promise<unknown>,
 ): Promise<unknown> {
   const result = await next();
-
   if (result instanceof Response) {
-    const headers = new Response(result.headers);
+    const headers = new Headers(result.headers);
 
     // HSTS — enforce HTTPS for 1 year, including subdomains
     if (!headers.has("strict-transport-security")) {

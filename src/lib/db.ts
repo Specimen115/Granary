@@ -27,11 +27,11 @@ export const dbSource: DbSource = databaseUrl ? "neon" : "pglite";
  *   const rows2 = await sql.query("select * from todos where id = $1", [id]);
  */
 export interface Sql {
-  <T = Record<string, unknown>>(
+  <T = Record<string, any>>(
     strings: TemplateStringsArray,
     ...values: unknown[]
   ): Promise<T[]>;
-  query<T = Record<string, unknown>>(
+  query<T = Record<string, any>>(
     text: string,
     params?: unknown[],
   ): Promise<T[]>;

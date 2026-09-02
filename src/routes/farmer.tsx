@@ -56,6 +56,7 @@ function FarmerDesk() {
     () => lots.filter((l) => l.farmerId === farmerId && l.status !== "released"),
     [lots, farmerId],
   );
+  const farmersList = useGranary((s) => s.farmersList);
   const [booking, setBooking] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
@@ -63,14 +64,51 @@ function FarmerDesk() {
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [myProfile, setMyProfile] = useState<Record<string, unknown> | null>(null);
 
-  // Fetch profile for editing
+  // Fetch profile
   useEffect(() => {
     if (isAuthenticated) {
       import("@/lib/server/granary").then(({ getMyProfile }) => {
-        getMyProfile().then((p) => setMyProfile(p as Record<string, unknown> | null)).catch(() => {});
+        getMyProfile().then((p) => {
+          const profile = p as Record<string, unknown> | null;
+          setMyProfile(profile);
+          if (profile && profile.name) {
+            const currentList = useGranary.getState().farmersList;
+            const updated = currentList.map((f) =>
+              f.id === farmerId
+                ? {
+                    ...f,
+                    name: String(profile.name),
+                    farm: String(profile.farm_or_contact || f.farm),
+                    village: String(profile.village_or_company || f.village),
+                  }
+                : f
+            );
+            useGranary.setState({ farmersList: updated });
+          }
+        }).catch(() => {});
       }).catch(() => {});
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, farmerId]);
+
+  const activeFarmer = useMemo(() => {
+    if (myProfile && (myProfile.name || myProfile.farm_or_contact)) {
+      const name = String(myProfile.name || "Farmer");
+      return {
+        id: String(myProfile.user_id || farmerId),
+        name,
+        farm: String(myProfile.farm_or_contact || `${name}'s Farm`),
+        village: String(myProfile.village_or_company || "Niphad"),
+        district: "Nashik",
+        crops: (myProfile.crops as string[]) || ["Grapes", "Onion"],
+        lat: Number(myProfile.lat || 20.08),
+        lng: Number(myProfile.lng || 74.11),
+        photo: `https://api.dicebear.com/9.x/lorelei/svg?seed=${encodeURIComponent(name)}&backgroundColor=d7e4d4`,
+      };
+    }
+    const found = farmersList.find((f) => f.id === farmerId);
+    if (found) return found;
+    return farmer;
+  }, [myProfile, farmersList, farmerId]);
   const counts = useMemo(() => {
     let empty = 0;
     let full = 0;
@@ -170,14 +208,14 @@ function FarmerDesk() {
         <div className="flex flex-col gap-3 rounded-3xl bg-card px-4 py-4 shadow-[var(--shadow-border)] md:flex-row md:items-center md:justify-between md:px-5">
           <div className="flex items-center gap-3">
             <img
-              src={farmer.photo}
+              src={activeFarmer.photo}
               alt=""
               className="size-12 rounded-2xl bg-muted outline outline-1 -outline-offset-1 outline-black/10"
             />
             <div>
-              <p className="font-medium">{farmer.name}</p>
+              <p className="font-medium">{activeFarmer.name}</p>
               <p className="text-[13px] text-muted-foreground">
-                {farmer.farm} · {farmer.village}
+                {activeFarmer.farm} · {activeFarmer.village}
               </p>
             </div>
           </div>
@@ -374,7 +412,7 @@ function FarmerDesk() {
       <AiRequestModal
         open={aiModalOpen}
         onOpenChange={setAiModalOpen}
-        defaultLocation={`${farmer.village}, Nashik`}
+        defaultLocation={`${activeFarmer.village}, Nashik`}
       />
       <FarmerApprovalAlertModal
         open={approvalModalOpen && !!approvedNotification}
@@ -385,18 +423,32 @@ function FarmerDesk() {
         open={profileEditOpen}
         onOpenChange={setProfileEditOpen}
         profile={{
-          name: (myProfile?.name as string) || farmer.name,
+          name: (myProfile?.name as string) || activeFarmer.name,
           phone: (myProfile?.phone as string) || "",
-          village_or_company: (myProfile?.village_or_company as string) || farmer.village,
-          farm_or_contact: (myProfile?.farm_or_contact as string) || farmer.farm,
+          village_or_company: (myProfile?.village_or_company as string) || activeFarmer.village,
+          farm_or_contact: (myProfile?.farm_or_contact as string) || activeFarmer.farm,
         }}
         onSave={async (updates) => {
           const { updateMyProfile } = await import("@/lib/server/granary");
           await updateMyProfile({ data: updates });
           refreshFromDb();
           const { getMyProfile } = await import("@/lib/server/granary");
-          const p = await getMyProfile() as Record<string, unknown> | null;
+          const p = (await getMyProfile()) as Record<string, unknown> | null;
           setMyProfile(p);
+          if (p && p.name) {
+            const currentList = useGranary.getState().farmersList;
+            const updated = currentList.map((f) =>
+              f.id === farmerId
+                ? {
+                    ...f,
+                    name: String(p.name),
+                    farm: String(p.farm_or_contact || f.farm),
+                    village: String(p.village_or_company || f.village),
+                  }
+                : f
+            );
+            useGranary.setState({ farmersList: updated });
+          }
         }}
         onDeleteAccount={async () => {
           const { deleteMyAccount } = await import("@/lib/server/granary");
